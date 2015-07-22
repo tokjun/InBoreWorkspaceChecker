@@ -109,7 +109,7 @@ class InBoreWorkspaceCheckerWidget:
     self.DiameterSliderWidget = ctk.ctkSliderWidget()
     self.DiameterSliderWidget.singleStep = 1.0
     self.DiameterSliderWidget.minimum = 200.0
-    self.DiameterSliderWidget.maximum = 100.0
+    self.DiameterSliderWidget.maximum = 1000.0
     self.DiameterSliderWidget.value = 700.0
     self.DiameterSliderWidget.setToolTip("Inner diameter of the gantry")
     parametersFormLayout.addRow("Gantry diameter (mm): ", self.DiameterSliderWidget)
@@ -119,8 +119,8 @@ class InBoreWorkspaceCheckerWidget:
     #
     self.CenterOffsetRSliderWidget = ctk.ctkSliderWidget()
     self.CenterOffsetRSliderWidget.singleStep = 1.0
-    self.CenterOffsetRSliderWidget.minimum = 0.0
-    self.CenterOffsetRSliderWidget.maximum = 100.0
+    self.CenterOffsetRSliderWidget.minimum = -500.0
+    self.CenterOffsetRSliderWidget.maximum = 500.0
     self.CenterOffsetRSliderWidget.value = 0.0
     self.CenterOffsetRSliderWidget.setToolTip("Offset of the grantry center from the imaging isocenter.")
     parametersFormLayout.addRow("Center offset R (mm): ", self.CenterOffsetRSliderWidget)
@@ -130,8 +130,8 @@ class InBoreWorkspaceCheckerWidget:
     #
     self.CenterOffsetASliderWidget = ctk.ctkSliderWidget()
     self.CenterOffsetASliderWidget.singleStep = 1.0
-    self.CenterOffsetASliderWidget.minimum = 0.0
-    self.CenterOffsetASliderWidget.maximum = 100.0
+    self.CenterOffsetASliderWidget.minimum = -500.0
+    self.CenterOffsetASliderWidget.maximum = 500.0
     self.CenterOffsetASliderWidget.value = 0.0
     self.CenterOffsetASliderWidget.setToolTip("Offset of the grantry center from the imaging isocenter.")
     parametersFormLayout.addRow("Center offset A (mm): ", self.CenterOffsetASliderWidget)
@@ -141,8 +141,8 @@ class InBoreWorkspaceCheckerWidget:
     #
     self.CenterOffsetSSliderWidget = ctk.ctkSliderWidget()
     self.CenterOffsetSSliderWidget.singleStep = 1.0
-    self.CenterOffsetSSliderWidget.minimum = 0.0
-    self.CenterOffsetSSliderWidget.maximum = 100.0
+    self.CenterOffsetSSliderWidget.minimum = -500.0
+    self.CenterOffsetSSliderWidget.maximum = 500.0
     self.CenterOffsetSSliderWidget.value = 0.0
     self.CenterOffsetSSliderWidget.setToolTip("Offset of the grantry center from the imaging isocenter.")
     parametersFormLayout.addRow("Center offset S (mm): ", self.CenterOffsetSSliderWidget)
@@ -175,6 +175,10 @@ class InBoreWorkspaceCheckerWidget:
 
     # Add vertical spacer
     self.layout.addStretch(1)
+
+    # Set default values
+    self.logic.setSize(self.LengthSliderWidget.value, self.DiameterSliderWidget.value)
+    self.logic.setCenterOffset(self.CenterOffsetRSliderWidget.value, self.CenterOffsetASliderWidget.value, self.CenterOffsetSSliderWidget.value)
     
   def cleanup(self):
     pass
@@ -188,21 +192,24 @@ class InBoreWorkspaceCheckerWidget:
   def onDestinationSelected(self):
     # Update destination node
     if self.DestinationSelector.currentNode():
-      self.logic.DestinationNode = self.DestinationSelector.currentNode()
-      self.logic.DestinationNode.AddObserver(vtk.vtkCommand.ModifiedEvent, self.onModelModifiedEvent)
+      self.logic.ModelNode = self.DestinationSelector.currentNode()
+      self.logic.ModelNode.AddObserver(vtk.vtkCommand.ModifiedEvent, self.onModelModifiedEvent)
 
     # Update checkbox
     if self.DestinationSelector.currentNode() == None:
       self.EnableCheckBox.setCheckState(False)
     else:
-      self.logic.DestinationNode.SetAttribute('InBoreWorkspaceChecker.Length',self.logic.LengthSliderWidget.value)
-      self.logic.DestinationNode.SetAttribute('InBoreWorkspaceChecker.Diameter',self.logic.DiameterSliderWidget.value)
-      self.logic.DestinationNode.SetAttribute('InBoreWorkspaceChecker.OffsetX',self.logic.DiameterSliderWidget.value)
-      self.logic.updateAblationVolume()
+      self.logic.ModelNode.SetAttribute('InBoreWorkspaceChecker.Length', "%f" % self.LengthSliderWidget.value)
+      self.logic.ModelNode.SetAttribute('InBoreWorkspaceChecker.Diameter', "%f" % self.DiameterSliderWidget.value)
+      self.logic.ModelNode.SetAttribute('InBoreWorkspaceChecker.OffsetX', "%f" % self.CenterOffsetRSliderWidget.value)
+      self.logic.ModelNode.SetAttribute('InBoreWorkspaceChecker.OffsetX', "%f" % self.CenterOffsetASliderWidget.value)
+      self.logic.ModelNode.SetAttribute('InBoreWorkspaceChecker.OffsetX', "%f" % self.CenterOffsetSSliderWidget.value)
+      self.logic.updateModel()
 
   def onSizeParameterUpdated(self):
     self.logic.setSize(self.LengthSliderWidget.value, self.DiameterSliderWidget.value)
-    self.logic.setCenterOffset(self.CenterOffsetSliderWidget.value)
+    self.logic.setCenterOffset(self.CenterOffsetRSliderWidget.value, self.CenterOffsetASliderWidget.value, self.CenterOffsetSSliderWidget.value)
+    self.logic.updateModel()
 
   def onReload(self,moduleName="InBoreWorkspaceChecker"):
     """Generic reload method for any scripted module.
@@ -214,7 +221,6 @@ class InBoreWorkspaceCheckerWidget:
     pass
 
 
-
 #
 # InBoreWorkspaceCheckerLogic
 #
@@ -222,47 +228,39 @@ class InBoreWorkspaceCheckerWidget:
 class InBoreWorkspaceCheckerLogic:
 
   def __init__(self):
-    self.SourceNode = None
-    self.DestinationNode = None
-    self.TubeRadius = 5.0
-
-    self.MajorAxis = 30.0
-    self.MinorAxis = 20.0
-    self.TipOffset = 0.0
-
+    self.ModelNode = None
+    self.Length = 10.0
+    self.Diameter = 10.0
+    self.Offset = [0.0, 0.0, 0.0]
     self.AutomaticUpdate = False
-    self.NumberOfIntermediatePoints = 20
     self.ModelColor = [0.0, 0.0, 1.0]
-
-    self.SphereSource = None
+    self.CylinderSource = None
     self.SliceIntersection = True
     
-  def setNumberOfIntermediatePoints(self,npts):
-    if npts > 0:
-      self.NumberOfIntermediatePoints = npts
-    self.updateAblationVolume()
+  def setSize(self, length, diameter):
+    self.Length = length
+    self.Diameter = diameter
+    self.updateModel()
 
-  def setSize(self, majorAxis, minorAxis):
-    self.MajorAxis = majorAxis
-    self.MinorAxis = minorAxis
-    self.updateAblationVolume()
-    
-  def setTipOffset(self, offset):
-    self.TipOffset = offset
-    self.updateAblationVolume()
+  def setCenterOffset(self, offsetR, offsetA, offsetS):
+    self.Offset = [offsetR, offsetA, offsetS]
+    self.updateModel()
 
   def enableAutomaticUpdate(self, auto):
     self.AutomaticUpdate = auto
-    self.updateAblationVolume()
+    self.updateModel()
 
   def enableSliceIntersection(self, state):
-    if self.DestinationNode.GetDisplayNodeID() == None:
+    if not self.ModelNode:
+      return
+    
+    if self.ModelNode.GetDisplayNodeID() == None:
       modelDisplayNode = slicer.vtkMRMLModelDisplayNode()
       modelDisplayNode.SetColor(self.ModelColor)
       slicer.mrmlScene.AddNode(modelDisplayNode)
-      self.DestinationNode.SetAndObserveDisplayNodeID(modelDisplayNode.GetID())
+      self.ModelNode.SetAndObserveDisplayNodeID(modelDisplayNode.GetID())
     
-    displayNodeID = self.DestinationNode.GetDisplayNodeID()
+    displayNodeID = self.ModelNode.GetDisplayNodeID()
     displayNode = slicer.mrmlScene.GetNodeByID(displayNodeID)
     if displayNode != None:
       if state:
@@ -270,11 +268,6 @@ class InBoreWorkspaceCheckerLogic:
       else:
         displayNode.SliceIntersectionVisibilityOff()
     
-
-  def controlPointsUpdated(self,caller,event):
-    if caller.IsA('vtkMRMLAnnotationRulerNode') and event == 'ModifiedEvent':
-      self.updateAblationVolume()
-
   def computeTransform(self, pTip, pTail, offset, transform):
     v1 = [0.0, 0.0, 0.0]
     vtk.vtkMath.Subtract(pTip, pTail, v1)
@@ -296,60 +289,62 @@ class InBoreWorkspaceCheckerLogic:
     transform.Translate(pTip)
     transform.Translate(tipOffset)
 
-  def updateAblationVolume(self):
+  def updateModel(self):
 
     if self.AutomaticUpdate == False:
       return
 
-    if self.SourceNode and self.DestinationNode:
+    if not self.ModelNode:
+      return
 
-      pTip = [0.0, 0.0, 0.0]
-      pTail = [0.0, 0.0, 0.0]
-      #self.SourceNode.GetNthFiducialPosition(0,pTip)
-      self.SourceNode.GetPosition1(pTip)
-      #self.SourceNode.GetNthFiducialPosition(1,pTail)
-      self.SourceNode.GetPosition2(pTail)
-      
-      if self.DestinationNode.GetDisplayNodeID() == None:
-        modelDisplayNode = slicer.vtkMRMLModelDisplayNode()
-        modelDisplayNode.SetColor(self.ModelColor)
-        slicer.mrmlScene.AddNode(modelDisplayNode)
-        self.DestinationNode.SetAndObserveDisplayNodeID(modelDisplayNode.GetID())
+    if self.ModelNode.GetDisplayNodeID() == None:
+      modelDisplayNode = slicer.vtkMRMLModelDisplayNode()
+      modelDisplayNode.SetColor(self.ModelColor)
+      slicer.mrmlScene.AddNode(modelDisplayNode)
+      self.ModelNode.SetAndObserveDisplayNodeID(modelDisplayNode.GetID())
         
-      displayNodeID = self.DestinationNode.GetDisplayNodeID()
-      modelDisplayNode = slicer.mrmlScene.GetNodeByID(displayNodeID)
+    displayNodeID = self.ModelNode.GetDisplayNodeID()
+    modelDisplayNode = slicer.mrmlScene.GetNodeByID(displayNodeID)
 
-      if modelDisplayNode != None and self.SliceIntersection == True:
+    if modelDisplayNode:
+      if self.SliceIntersection == True:
         modelDisplayNode.SliceIntersectionVisibilityOn()
       else:
         modelDisplayNode.SliceIntersectionVisibilityOff()
-        
-      if self.SphereSource == None:  
-        self.SphereSource = vtk.vtkSphereSource()
-        self.SphereSource.SetThetaResolution(20)
-        self.SphereSource.SetPhiResolution(20)
-        self.SphereSource.Update()
-        
-      # Scale sphere to make ellipsoid
-      scale = vtk.vtkTransform()
-      scale.Scale(self.MinorAxis, self.MinorAxis, self.MajorAxis)
-      scaleFilter = vtk.vtkTransformPolyDataFilter()
-      scaleFilter.SetInputConnection(self.SphereSource.GetOutputPort())
-      scaleFilter.SetTransform(scale)
-      scaleFilter.Update();
+
+      modelDisplayNode.SetOpacity(0.5)
       
-      # Transform
-      transform = vtk.vtkTransform()
-      self.computeTransform(pTip, pTail, self.TipOffset, transform)
-      transformFilter = vtk.vtkTransformPolyDataFilter()
-      transformFilter.SetInputConnection(scaleFilter.GetOutputPort())
-      transformFilter.SetTransform(transform)
-      transformFilter.Update();
-      
-      self.DestinationNode.SetAndObservePolyData(transformFilter.GetOutput())
-      self.DestinationNode.Modified()
-      
-      if self.DestinationNode.GetScene() == None:
-        slicer.mrmlScene.AddNode(self.DestinationNode)
+    if self.CylinderSource == None:  
+      self.CylinderSource = vtk.vtkCylinderSource()
+      self.CylinderSource.SetResolution(60)
+
+    self.CylinderSource.SetRadius(self.Diameter/2.0)
+    self.CylinderSource.SetHeight(self.Length)
+    self.CylinderSource.SetCenter(self.Offset)
+    self.CylinderSource.Update()
+
+    ## Scale sphere to make ellipsoid
+    #scale = vtk.vtkTransform()
+    #scale.Scale(self.MinorAxis, self.MinorAxis, self.MajorAxis)
+    #scaleFilter = vtk.vtkTransformPolyDataFilter()
+    #scaleFilter.SetInputConnection(self.CylinderSource.GetOutputPort())
+    #scaleFilter.SetTransform(scale)
+    #scaleFilter.Update();
+    
+    # Transform
+    #transform = vtk.vtkTransform()
+    #self.computeTransform(pTip, pTail, self.TipOffset, transform)
+    #transformFilter = vtk.vtkTransformPolyDataFilter()
+    #transformFilter.SetInputConnection(scaleFilter.GetOutputPort())
+    #transformFilter.SetInputConnection(self.CylinderSource.GetOutputPort())
+    #transformFilter.SetTransform(transform)
+    #transformFilter.Update();
+    
+    #self.ModelNode.SetAndObservePolyData(transformFilter.GetOutput())
+    self.ModelNode.SetAndObservePolyData(self.CylinderSource.GetOutput())
+    self.ModelNode.Modified()
+    
+    if self.ModelNode.GetScene() == None:
+      slicer.mrmlScene.AddNode(self.ModelNode)
 
         
